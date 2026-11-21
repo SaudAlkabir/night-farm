@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>مزرعة الليل</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+<meta name="theme-color" content="#141a24">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="مزرعة الليل">
 <style>
 /* Layout: full-screen canvas world; HUD pinned to the corners; menus are wooden boards. Works fully offline (system fonts only). */
 :root{
@@ -128,6 +136,34 @@ summary{cursor:pointer;font-weight:800;color:var(--straw)}
   #mini{width:104px;height:78px}
   .side button{width:38px;height:38px;font-size:18px}
   #hotbar .slot{--s:min(44px,calc((100vw - 48px)/9))}
+}
+/* ===== phone layout (body.mobile) — everything compact, thumbs at the bottom corners ===== */
+body.mobile #stats{max-width:56vw;gap:4px}
+body.mobile #stats .chip{padding:4px 7px;gap:6px;font-size:11px;border-radius:8px}
+body.mobile .bars{display:grid;grid-template-columns:auto auto;gap:3px 8px}
+body.mobile .bars>div{gap:3px!important;font-size:10px}
+body.mobile .bar{width:44px;height:7px}
+body.mobile #clock{font-size:11px;font-weight:700;line-height:1.35}
+body.mobile #quest{font-size:11px;padding:5px 8px;max-width:56vw;line-height:1.5}
+body.mobile #quest b{font-size:11.5px}
+body.mobile #mini{width:88px;height:66px}
+body.mobile #mini.big{width:min(92vw,520px);height:auto}
+body.mobile .side{gap:4px}
+body.mobile .side button{width:34px;height:34px;font-size:17px;border-radius:10px}
+body.mobile #hotbar{gap:3px}
+body.mobile #hotbar .slot{--s:min(40px,calc((100vw - 44px)/9))}
+body.mobile #selLbl{font-size:11px;padding:1px 8px;max-width:80vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body.mobile #touchBtns{bottom:calc(92px + env(safe-area-inset-bottom,0px));gap:10px}
+body.mobile #touchBtns button{width:62px;height:62px;font-size:27px}
+body.mobile #banner{font-size:clamp(22px,7vw,34px);top:20%}
+body.mobile #banner small{font-size:13px}
+body.mobile #toast{bottom:calc(158px + env(safe-area-inset-bottom,0px));font-size:13px;white-space:normal}
+body.mobile #bossBar{width:44vw;top:calc(84px + env(safe-area-inset-top,0px))}
+body.mobile #bossBar b{font-size:12px}
+@media (orientation:landscape){
+  body.mobile #touchBtns{bottom:calc(64px + env(safe-area-inset-bottom,0px));flex-direction:row}
+  body.mobile #stats, body.mobile #quest{max-width:38vw}
+  body.mobile #bossBar{top:calc(8px + env(safe-area-inset-top,0px))}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -277,6 +313,7 @@ summary{cursor:pointer;font-weight:800;color:var(--straw)}
     <h3>🖥️ الشاشة</h3>
     <div class="setrow"><label for="sBright">السطوع</label><input type="range" id="sBright" min="70" max="150" step="5"><span class="val" id="sBrightV"></span></div>
     <div class="setrow"><label>حجم الواجهة والأزرار</label><div class="seg" id="sUi"></div></div>
+    <div class="setrow"><label>نمط الشاشة والتحكم<small>«تلقائي» يختار ترتيب الجوال لما تلعب من جوال</small></label><div class="seg" id="sLayout"></div></div>
     <div class="setrow"><label>جودة الرسوم<small>«تلقائي» يخففها لحاله إذا الجهاز بطيء</small></label><div class="seg" id="sQual"></div></div>
     <div class="setrow"><label for="sFps">إظهار سرعة اللعبة (FPS)</label><input type="checkbox" id="sFps"></div>
     <div class="setrow"><label for="sShake">اهتزاز الشاشة وقت الضرب</label><input type="checkbox" id="sShake"></div>
@@ -659,6 +696,7 @@ const QUESTS=[
    ========================================================= */
 const cv=$('game'), ctx=cv.getContext('2d');
 const dark=document.createElement('canvas'), dctx=dark.getContext('2d');
+var MOBILE=false, questOpen=false; // phone layout on/off (set from settings: auto / phone / computer)
 var LOWQ=false, autoLow=false, fpsAvg=60, slowT=0, fpsT=0; // low graphics: 1x pixel density, fewer particles
 /* ground is drawn in 16x16-tile chunks, created only when visible and freed when far away */
 const CH=16, CW=Math.ceil(MW/CH), CHH=Math.ceil(MH/CH);
@@ -691,7 +729,7 @@ addEventListener('resize',resize); resize();
    SOUND (generated, no files)
    ========================================================= */
 let AC=null, muted=false;
-const SET={vol:80,mute:false,bright:100,ui:1,shake:true,mini:true,arrow:true,touch:true,quality:'auto',fps:false};
+const SET={vol:80,mute:false,bright:100,ui:1,shake:true,mini:true,arrow:true,touch:true,quality:'auto',fps:false,layout:'auto'};
 try{ Object.assign(SET,JSON.parse(localStorage.getItem('nightFarm_settings')||'{}')); }catch(e){}
 function ac(){ if(!AC){ try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){} } if(AC&&AC.state==='suspended') AC.resume(); return AC; }
 function snd(f,d=.08,type='square',v=.04,slide=0){
@@ -1107,7 +1145,8 @@ cv.addEventListener('wheel',e=>{ if(!running||anyPanel()) return; S.sel=(S.sel+(
 cv.addEventListener('touchstart',e=>{
   ac(); e.preventDefault(); lastTouch=performance.now();
   for(const t of e.changedTouches){
-    if(!joy&&t.clientX<VW*.42&&t.clientY>VH*.35) joy={id:t.identifier,ox:t.clientX,oy:t.clientY,x:t.clientX,y:t.clientY};
+    if(!joy&&t.clientX<VW*(MOBILE?.5:.42)&&t.clientY>VH*(MOBILE?.4:.35)){
+      const b=joyBase(); joy=MOBILE?{id:t.identifier,ox:b.x,oy:b.y,x:t.clientX,y:t.clientY}:{id:t.identifier,ox:t.clientX,oy:t.clientY,x:t.clientX,y:t.clientY}; }
     else if(!aimTouch){ aimTouch={id:t.identifier}; mouse.x=t.clientX; mouse.y=t.clientY; mouse.has=true; mouse.down=true; }
   }
 },{passive:false});
@@ -1115,8 +1154,19 @@ cv.addEventListener('touchmove',e=>{ e.preventDefault(); for(const t of e.change
 function touchEnd(e){ for(const t of e.changedTouches){ if(joy&&t.identifier===joy.id) joy=null; if(aimTouch&&t.identifier===aimTouch.id){ aimTouch=null; mouse.down=false; } } }
 cv.addEventListener('touchend',touchEnd); cv.addEventListener('touchcancel',touchEnd);
 const aimWorld=()=>({x:camX+mouse.x/Z, y:camY+mouse.y/Z});
+/* tall sprites (trees, palms, walls…) are drawn above their own tile; this is how far up their visible middle sits */
+const LIFT={tree:16,palm:24,wood_wall:8,stone_wall:8,iron_wall:8,wood_door:8,iron_door:8,ruin:8,cave_rock:8,bookshelf:8,turret:6,arrow_tower:10,radio:14,well:6,furnace:6};
+function wantsEmptyTile(){ const it=cur(), D=it&&IT[it.id]; return !!(D&&(D.place||D.floor||D.seed||D.tool==='hoe'||it.id==='palm_sapling')); }
+/* fixed joystick spot on phones: bottom-left, above the tool bar */
+function joyBase(){ const land=VW>VH; return {x:land?100:86, y:VH-(land?120:190)}; }
 function targetTile(){
-  const a=aimWorld(), tx=floor(a.x/TILE), ty=floor(a.y/TILE);
+  const a=aimWorld(); let tx=floor(a.x/TILE), ty=floor(a.y/TILE);
+  // snap to the object the player most likely meant: whichever sprite is drawn closest to the pointer
+  if(!wantsEmptyTile()){ let bd=30, bx=tx, by=ty;
+    for(let dy=-1;dy<=2;dy++)for(let dx=-1;dx<=1;dx++){ const x=tx+dx, y=ty+dy; if(!inMap(x,y)) continue; const o=S.obj[idx(x,y)];
+      if(!o||(o.t==='crop'&&o.g<1)) continue;
+      const d=Math.hypot(a.x-(x+.5)*TILE,a.y-((y+.5)*TILE-(LIFT[o.t]||0))); if(d<bd){ bd=d; bx=x; by=y; } }
+    tx=bx; ty=by; }
   const ok=inMap(tx,ty), reach=ok&&Math.hypot((tx+.5)*TILE-S.p.x,(ty+.5)*TILE-S.p.y)<=REACH;
   return {tx,ty,reach,i:ok?idx(tx,ty):-1};
 }
@@ -1517,7 +1567,8 @@ function update(dt){
   else if(ml>0){ moveEnt(p,mx*speed*dt,my*speed*dt,11,'p'); p.walk+=dt*10; }
   const touchMode=performance.now()-lastTouch<4000;
   if(tbtn) touchAim();
-  if(mouse.has&&(!touchMode||aimTouch||tbtn)){ const a=aimWorld(); p.ang=Math.atan2(a.y-p.y,a.x-p.x); } else if(ml>0) p.ang=Math.atan2(my,mx);
+  if(MOBILE&&ml>0&&!aimTouch&&!tbtn) p.ang=Math.atan2(my,mx); // on phones you face where you walk
+  else if(mouse.has&&(!(touchMode||MOBILE)||aimTouch||tbtn)){ const a=aimWorld(); p.ang=Math.atan2(a.y-p.y,a.x-p.x); } else if(ml>0) p.ang=Math.atan2(my,mx);
   p.cd-=dt; p.swing=Math.max(0,p.swing-dt); p.hurt=Math.max(0,p.hurt-dt); p.recoil=Math.max(0,p.recoil-dt); p.safe=Math.max(0,(p.safe||0)-dt);
   if(mouse.down&&!p.drive) useAction();
   // hunger & regen
@@ -1865,6 +1916,9 @@ function checkQuest(){
 }
 function questHTML(){
   const Q=QUESTS[S.q];
+  if(MOBILE&&!questOpen){ // phones: one line only, tap to open the full list
+    if(!Q) return '<b>🌾 عالمك ملكك ▾</b>';
+    const nx=Q.obj.find(o=>!o[1]()); return '<b>📜 الفصل '+(S.q+1)+': '+Q.t+' ▾</b>'+(nx?'<div class="o">○ '+nx[0]+'</div>':''); }
   if(!Q) return '<b>🌾 عالمك ملكك</b><span class="o">استمر في الزراعة والبناء والنجاة.</span>'+tasksLine();
   let h='<b>الفصل '+(S.q+1)+': '+Q.t+'</b>';
   for(const [txt,f] of Q.obj){ const d=f(); h+='<div class="o'+(d?' d':'')+'">'+(d?'✔ ':'○ ')+txt+'</div>'; }
@@ -1961,6 +2015,7 @@ function render(){
   ctx.textAlign='center'; ctx.textBaseline='middle';
   for(const it of S.items){ if(it.x<camX-40||it.x>camX+vw+40||it.y<camY-40||it.y>camY+vh+40) continue;
     const b=Math.sin(it.t*3)*3; shadow(it.x,it.y+10,8,3); ctx.font=(it.bag?26:18)+'px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif'; ctx.fillText(it.bag?'🎒':IT[it.id].ic,it.x,it.y+b); }
+  if(MOBILE&&running&&!mouse.down&&!aimTouch&&!p.drive){ const q=useTarget('use'); mouse.has=true; mouse.x=(q.x-camX)*Z; mouse.y=(q.y-camY)*Z; }
   if(!anyPanel()) drawTarget(t);
   if(!p.drive) tall.push({y:p.y+12,f:()=>drawPlayer(t)});
   if(S.jeep&&!S.layer) tall.push({y:S.jeep.y+14,f:()=>drawJeep()});
@@ -2024,10 +2079,12 @@ function render(){
     ctx.font='bold 26px "Segoe UI",Tahoma,sans-serif'; ctx.fillStyle='#f0c35a'; ctx.textAlign='center'; ctx.fillText('💤 نائم… (تحرّك لتصحى)',VW/2,VH/2); }
   if(p.hurt>0||p.hp<30){ ctx.setTransform(1,0,0,1,0,0); const a=p.hurt>0?p.hurt*1.2:.15+Math.sin(t*4)*.08; const g=ctx.createRadialGradient(cv.width/2,cv.height/2,Math.min(cv.width,cv.height)*.3,cv.width/2,cv.height/2,Math.max(cv.width,cv.height)*.7); g.addColorStop(0,'rgba(200,0,0,0)'); g.addColorStop(1,`rgba(200,0,0,${clamp(a,0,.5)})`); ctx.fillStyle=g; ctx.fillRect(0,0,cv.width,cv.height); }
   if(running&&!anyPanel()&&SET.arrow) drawGoal(t);
-  if(joy){ ctx.setTransform(DPR,0,0,DPR,0,0); ctx.strokeStyle='rgba(255,255,255,.35)'; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(joy.ox,joy.oy,50,0,7); ctx.stroke();
-    const dx=joy.x-joy.ox, dy=joy.y-joy.oy, d=Math.hypot(dx,dy), m=Math.min(d,50)/(d||1); ctx.fillStyle='rgba(240,195,90,.6)'; ctx.beginPath(); ctx.arc(joy.ox+dx*m,joy.oy+dy*m,22,0,7); ctx.fill(); }
-  else if(isTouch&&running&&!anyPanel()){ ctx.setTransform(DPR,0,0,DPR,0,0); const jx=96, jy=VH-190;
-    ctx.strokeStyle='rgba(255,255,255,.2)'; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(jx,jy,48,0,7); ctx.stroke(); ctx.fillStyle='rgba(255,255,255,.1)'; ctx.beginPath(); ctx.arc(jx,jy,20,0,7); ctx.fill(); }
+  if(joy){ ctx.setTransform(DPR,0,0,DPR,0,0); ctx.fillStyle='rgba(0,0,0,.18)'; ctx.beginPath(); ctx.arc(joy.ox,joy.oy,52,0,7); ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,.4)'; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(joy.ox,joy.oy,52,0,7); ctx.stroke();
+    const dx=joy.x-joy.ox, dy=joy.y-joy.oy, d=Math.hypot(dx,dy), m=Math.min(d,52)/(d||1); ctx.fillStyle='rgba(240,195,90,.75)'; ctx.beginPath(); ctx.arc(joy.ox+dx*m,joy.oy+dy*m,24,0,7); ctx.fill(); }
+  else if((MOBILE||isTouch)&&running&&!anyPanel()){ ctx.setTransform(DPR,0,0,DPR,0,0); const b=joyBase();
+    ctx.fillStyle='rgba(0,0,0,.14)'; ctx.beginPath(); ctx.arc(b.x,b.y,52,0,7); ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,.28)'; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(b.x,b.y,52,0,7); ctx.stroke(); ctx.fillStyle='rgba(255,255,255,.16)'; ctx.beginPath(); ctx.arc(b.x,b.y,22,0,7); ctx.fill(); }
 }
 function drawTarget(t){
   const it=cur(), D=it?IT[it.id]:null;
@@ -2758,7 +2815,7 @@ function openJournal(){
   const more=6-(S.notes.length-1); if(more>0){ const d=document.createElement('div'); d.style.cssText='color:var(--muted);font-size:13px;margin-top:6px'; d.textContent='باقي '+more+' رسائل مخفية في صناديق المدينة…'; nl.appendChild(d); }
 }
 $('jX').onclick=()=>$('journal').hidden=true;
-$('quest').onclick=openJournal; $('bJournal').onclick=()=>{ if($('journal').hidden&&!anyPanel()) openJournal(); else $('journal').hidden=true; };
+$('quest').onclick=()=>{ if(MOBILE){ questOpen=!questOpen; questKey=''; } else openJournal(); }; $('bJournal').onclick=()=>{ if($('journal').hidden&&!anyPanel()) openJournal(); else $('journal').hidden=true; };
 $('bBag').onclick=()=>{ if($('bag').hidden&&!anyPanel()) openBag(); else closeBag(); };
 function openPause(){ $('pause').hidden=false; $('pMsg').textContent=''; mouse.down=false; }
 $('bPause').onclick=()=>{ if(!anyPanel()) openPause(); };
@@ -2771,7 +2828,9 @@ let restartArm=false;
 function saveSettings(){ try{ localStorage.setItem('nightFarm_settings',JSON.stringify(SET)); }catch(e){} applySettings(); }
 function applySettings(){
   muted=SET.mute; cv.style.filter=SET.bright!==100?`brightness(${SET.bright/100})`:'';
-  $('mini').hidden=!SET.mini; $('hud').style.zoom=SET.ui; $('touchBtns').hidden=!(isTouch&&SET.touch);
+  const mob=SET.layout==='mobile'||((SET.layout||'auto')==='auto'&&isTouch&&Math.min(screen.width,screen.height)<820);
+  if(mob!==MOBILE){ MOBILE=mob; questKey=''; } document.body.classList.toggle('mobile',MOBILE);
+  $('mini').hidden=!SET.mini; $('hud').style.zoom=SET.ui; $('touchBtns').hidden=!((isTouch||MOBILE)&&SET.touch);
   const lq=SET.quality==='low'||(SET.quality==='auto'&&autoLow); if(lq!==LOWQ){ LOWQ=lq; resize(); }
   $('fps').hidden=!SET.fps;
 }
@@ -2782,6 +2841,7 @@ function renderSettings(){
   $('sBright').value=SET.bright; $('sBrightV').textContent=SET.bright+'%';
   $('sShake').checked=SET.shake; $('sMini').checked=SET.mini; $('sArrow').checked=SET.arrow; $('sTouch').checked=SET.touch;
   seg('sUi',[[.85,'صغير'],[1,'عادي'],[1.15,'كبير'],[1.3,'كبير جداً']],SET.ui,v=>{ SET.ui=v; saveSettings(); renderSettings(); });
+  seg('sLayout',[['auto','تلقائي'],['mobile','جوال 📱'],['desktop','كمبيوتر 💻']],SET.layout||'auto',v=>{ SET.layout=v; saveSettings(); renderSettings(); });
   seg('sQual',[['auto','تلقائي'+(autoLow?' (مخففة)':'')],['high','عالية'],['low','منخفضة']],SET.quality,v=>{ SET.quality=v; autoLow=false; saveSettings(); renderSettings(); });
   $('sFps').checked=SET.fps;
   const inGame=running&&!!S; $('sGame').hidden=!inGame; $('sGameH').hidden=!inGame;
@@ -2862,7 +2922,8 @@ function startGame(loaded){
   S.pets=null; S.p.ride=null; S.p.drive=false; plane=null; sand=0; sleeping=false; fishing=null; rain=0; birds=[]; surfMobs=[];
   if(S.layer){ surfMobs=mobs; mobs=[]; spawnCaveMobs(); }
   falcon=null; if(!S.tasks||!S.tasks.length) makeTasks();
-  computeRooms(); npc=placeNpc(); placeSurvivors(); $('touchBtns').hidden=!(isTouch&&SET.touch);
+  computeRooms(); npc=placeNpc(); placeSurvivors(); $('touchBtns').hidden=!((isTouch||MOBILE)&&SET.touch);
+  if(MOBILE&&VH>VW&&!startGame.tip){ startGame.tip=1; setTimeout(()=>toast('📱 نصيحة: اقلب الجوال بالعرض عشان تشوف أكثر من العالم'),5000); }
   redrawGround(); lastNight=isNight(); running=true; hotDirty=true; hudKey=''; questKey='';
   $('menu').hidden=true; $('hud').hidden=false;
   if(!S.layer) for(let k=0;k<10;k++) maintainAnimals();
@@ -2883,10 +2944,29 @@ for(const [id,mode] of [['tAtk','atk'],['tUse','use']]){
   const up=()=>{ if(tbtn===mode){ tbtn=null; mouse.down=false; } b.classList.remove('on'); };
   b.addEventListener('pointerup',up); b.addEventListener('pointercancel',up); b.addEventListener('pointerleave',up);
 }
-function touchAim(){
+/* where the ✋ / ⚔️ buttons will act — also used to draw a permanent preview square on phones */
+function useTarget(mode){
   const p=S.p, it=cur(), D=it&&IT[it.id]; let tx=p.x+Math.cos(p.ang)*44, ty=p.y+Math.sin(p.ang)*44, found=false;
   const pick=(x,y)=>{ tx=x; ty=y; found=true; };
-  if(tbtn==='atk'){
+  if(mode==='use'&&wantsEmptyTile()){
+    // building / planting: best free tile in the facing direction, never the tile you stand on
+    const px=floor(p.x/TILE), py=floor(p.y/TILE), solid=D.place&&OBJ[D.place]&&(OBJ[D.place].ps||OBJ[D.place].zs); let bi=-1, bs=1e9;
+    for(let y=py-2;y<=py+2;y++)for(let x=px-2;x<=px+2;x++){ if(!inMap(x,y)) continue;
+      const i=idx(x,y), o=S.obj[i], g=S.ground[i], cx=(x+.5)*TILE, cy=(y+.5)*TILE, d=Math.hypot(cx-p.x,cy-p.y); if(d>REACH||g===2) continue;
+      let ok;
+      if(D.floor) ok=g!==D.floor&&!(o&&OBJ[o.t].nat);
+      else if(D.seed) ok=!o&&g===1;
+      else if(D.tool==='hoe') ok=!o&&[0,6,9].includes(g);
+      else if(it.id==='palm_sapling') ok=!o&&[0,1,4,6,9].includes(g);
+      else ok=!o;
+      if(ok&&(solid||it.id==='palm_sapling')&&Math.abs(p.x-cx)<TILE/2+12&&Math.abs(p.y-cy)<TILE/2+12) ok=false;
+      if(!ok) continue;
+      let da=Math.atan2(cy-p.y,cx-p.x)-p.ang; da=Math.abs(Math.atan2(Math.sin(da),Math.cos(da)));
+      const sc=da*80+d*.4; if(sc<bs){ bs=sc; bi=i; } }
+    if(bi>=0) pick((bi%MW+.5)*TILE,(floor(bi/MW)+.5)*TILE);
+    return {x:tx,y:ty,found};
+  }
+  if(mode==='atk'){
     let best=null, bd=340;
     for(const m of mobs){ if(!MOB[m.type].hostile||m.leaving||m.dead) continue; const d=Math.hypot(m.x-p.x,m.y-p.y); if(d<bd){ bd=d; best=m; } }
     if(!best){ bd=130; for(const m of mobs){ if(MOB[m.type].hostile||m.tame||m.dead) continue; const d=Math.hypot(m.x-p.x,m.y-p.y); if(d<bd){ bd=d; best=m; } } }
@@ -2908,10 +2988,14 @@ function touchAim(){
         if(!useful) continue;
         let da=Math.atan2(cy-p.y,cx-p.x)-p.ang; da=Math.abs(Math.atan2(Math.sin(da),Math.cos(da)));
         const sc=d+da*60; if(sc<bs){ bs=sc; bi=i; } }
-      if(bi>=0) pick((bi%MW+.5)*TILE,(floor(bi/MW)+.5)*TILE);
+      if(bi>=0){ const o=S.obj[bi]; pick((bi%MW+.5)*TILE,(floor(bi/MW)+.5)*TILE-(o?(LIFT[o.t]||0):0)); }
     }
   }
-  mouse.has=true; mouse.x=(tx-camX)*Z; mouse.y=(ty-camY)*Z; mouse.down=true;
+  return {x:tx,y:ty,found};
+}
+function touchAim(){
+  const q=useTarget(tbtn);
+  mouse.has=true; mouse.x=(q.x-camX)*Z; mouse.y=(q.y-camY)*Z; mouse.down=true;
 }
 
 /* =========================================================
@@ -2934,6 +3018,8 @@ function frame(now){
 addEventListener('pagehide',()=>save(true));
 document.addEventListener('visibilitychange',()=>{ if(document.hidden) save(true); });
 applySettings();
+// offline app: when played from the web link, keep a copy on the device so it opens without internet next time
+if('serviceWorker' in navigator&&location.protocol==='https:') navigator.serviceWorker.register('sw.js').catch(()=>{});
 // menu background world
 newGame(); redrawGround(); S.time=DAY-14;
 renderMenu();
