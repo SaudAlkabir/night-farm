@@ -713,8 +713,8 @@ const QUESTS=[
   obj:[['اصنع معولاً حديدياً ⛏️',()=>st('crafted_iron_pick')>=1],['استخرج 4 خام ذهب 🟡',()=>st('got_gold_ore')>=4],['استخرج 3 ألماس 💎 من أعمق التلال',()=>st('got_diamond')>=3]],reward:[['iron',4]]},
  {t:'جهاز الإرسال',intro:'عندك المواد تقريباً. على السندان اصنع القطع: اللوحات الإلكترونية، والهوائي، والبطارية، وجهاز الإرسال.\n\nبعدها ركّب محطة الراديو على طاولة العمل، وضعها قرب بيتك.',
   obj:[['اصنع لوحة إلكترونية 💾',()=>st('crafted_circuit')>=1],['اصنع هوائياً 📶',()=>st('crafted_antenna')>=1],['اصنع بطارية 🔋',()=>st('crafted_battery')>=1],['اصنع جهاز الإرسال 📻',()=>st('crafted_transmitter')>=1],['اصنع محطة الراديو وضعها 📡',()=>st('placed_radio')>=1]],reward:[['bullets',30],['medkit',2]]},
- {t:'النداء الأخير',intro:'المحطة جاهزة. لما ترسل النداء، الإشارة بتوصل للمنطقة الآمنة…\n\nلكن صوت الجهاز بيجذب كل زومبي وذئب في المنطقة! جهّز دفاعاتك وأسلحتك وأكلك، وبعدها اضغط على المحطة.',
-  obj:[['اضغط على محطة الراديو لإرسال النداء',()=>st('radio_on')>=1],['اصمد حتى وصول المروحية 🚁',()=>st('rescued')>=1]],reward:[]},
+ {t:'النداء الأخير',intro:'المحطة جاهزة. لما ترسل النداء، الإشارة بتوصل للمنطقة الآمنة…\n\nبيتعلّم لك مكان فاضي تهبط فيه المروحية. روح له، واقتل 50 مصاب يجونك على موجات (5 في كل موجة). جهّز أسلحتك وأكلك وضماداتك، وبعدها اضغط على المحطة.',
+  obj:[['اضغط على محطة الراديو لإرسال النداء',()=>st('radio_on')>=1],['روح لمنطقة الهبوط واقتل 50 مصاب 🚁',()=>st('rescued')>=1]],reward:[]},
 ];
 
 /* =========================================================
@@ -740,6 +740,9 @@ function drawGround(vw,vh){
     if(vis){ const ck=chunks[k]||buildChunk(cx,cy); ctx.drawImage(ck.cv,cx*CH*TILE,cy*CH*TILE); }
     else if(chunks[k]&&(cx<ax-1||cx>bx+1||cy<ay-1||cy>by+1)) chunks[k]=null;
   }
+  // prepare one neighbouring chunk per frame, so walking into it never causes a hitch
+  for(let cy=Math.max(0,ay-1);cy<=Math.min(CHH-1,by+1);cy++)for(let cx=Math.max(0,ax-1);cx<=Math.min(CW-1,bx+1);cx++)
+    if(!chunks[cy*CW+cx]){ buildChunk(cx,cy); return; }
 }
 const miniEl=$('mini'), mctx=miniEl.getContext('2d');
 const miniSrc=document.createElement('canvas'); miniSrc.width=MW; miniSrc.height=MH; const msctx=miniSrc.getContext('2d');
@@ -931,23 +934,52 @@ function parseObjs(list){
   return O;
 }
 const cleanItems=a=>(a||[]).filter(it=>it.bag||it.id);
+/* compact world save: one character per tile for the object type, plus a short list for the few
+   objects whose state differs from default (damaged, crops, chests, furnaces…). ~4x smaller and faster.
+   NOTE: OBJ keys are only ever appended to, so these character codes stay valid across versions. */
+const OBJ_KEYS=Object.keys(OBJ);
+function encObjs(O){
+  const codes=new Array(NN), ex=[];
+  for(let i=0;i<NN;i++){ const o=O[i]; if(!o){ codes[i]=' '; continue; }
+    codes[i]=String.fromCharCode(0x100+OBJ_KEYS.indexOf(o.t));
+    const D=OBJ[o.t], hp=Math.round(o.hp*100)/100;
+    if(o.t==='crop') ex.push([i,Math.round(o.g*1000)/1000,o.k]);
+    else if(o.t==='crate') ex.push([i,hp,o.note]);
+    else if(o.t==='bush') ex.push([i,hp,o.b?1:0]);
+    else if(o.t==='chest') ex.push([i,hp,o.items]);
+    else if(o.t==='palm') ex.push([i,hp,[Math.round((o.g??1)*1000)/1000,Math.round(o.dt||0)]]);
+    else if(o.t==='furnace') ex.push([i,hp,o.f||null]);
+    else if(hp!==(D.hp??D.max)) ex.push([i,hp]); }
+  return {s:codes.join(''),ex};
+}
+function decObjs(d){
+  const O=new Array(NN).fill(null);
+  for(let i=0;i<NN;i++){ const c=d.s.charCodeAt(i); if(c===32) continue; const t=OBJ_KEYS[c-0x100]; if(!t) continue; const D=OBJ[t];
+    O[i]=t==='crop'?{t,k:'wheat',g:0}:{t,hp:D.hp??D.max}; }
+  for(const [i,a,b] of d.ex){ const o=O[i]; if(!o) continue;
+    if(o.t==='crop'){ o.g=a; o.k=b; continue; }
+    o.hp=a; if(o.t==='crate') o.note=b; if(o.t==='bush') o.b=b; if(o.t==='chest'&&Array.isArray(b)) o.items=b;
+    if(o.t==='palm'&&b){ o.g=b[0]; o.dt=b[1]; } if(o.t==='furnace'&&b) o.f=b; }
+  for(const o of O) if(o&&o.t==='chest'&&!o.items) o.items=new Array(27).fill(null);
+  return O;
+}
 function serialize(){
   const surf=S.layer?S.other:{ground:S.ground,obj:S.obj,items:S.items}, mine=S.layer?{ground:S.ground,obj:S.obj,items:S.items}:S.other;
   const petSrc=S.layer?surfMobs:mobs;
   const pets=petSrc.filter(m=>m.tame&&!m.dead).map(m=>({type:m.type,x:Math.round(m.x),y:Math.round(m.y),hp:m.hp,baby:m.baby||0,home:m.home,sheared:m.sheared||0,milkT:m.milkT||0}));
-  return {v:5,pets,diff:S.diff,layer:S.layer||0,surv:S.surv,xp:S.xp||0,lvl:S.lvl||1,falcon:S.falcon||0,tasks:S.tasks||[],
-    jeep:S.jeep?{x:Math.round(S.jeep.x),y:Math.round(S.jeep.y),ang:S.jeep.ang,fuel:Math.round(S.jeep.fuel)}:null,g:encG(surf.ground),o:objList(surf.obj),items:cleanItems(surf.items),
-    mine:mine?{g:encG(mine.ground),o:objList(mine.obj),items:cleanItems(mine.items)}:null,
+  return {v:6,pets,diff:S.diff,layer:S.layer||0,surv:S.surv,xp:S.xp||0,lvl:S.lvl||1,falcon:S.falcon||0,tasks:S.tasks||[],
+    jeep:S.jeep?{x:Math.round(S.jeep.x),y:Math.round(S.jeep.y),ang:S.jeep.ang,fuel:Math.round(S.jeep.fuel)}:null,g:encG(surf.ground),oc:encObjs(surf.obj),items:cleanItems(surf.items),
+    mine:mine?{g:encG(mine.ground),oc:encObjs(mine.obj),items:cleanItems(mine.items)}:null,
     p:{x:S.p.x,y:S.p.y,hp:S.p.hp,food:S.p.food,water:S.p.water},inv:S.inv,armor:S.armor,sel:S.sel,st:S.st,q:S.q,notes:S.notes,time:S.time,bed:S.bed,seed:S.seed,saved:Date.now()};
 }
 function deserialize(d){
   newGame();
-  S.ground=d.v>=5?decG(d.g):Uint8Array.from(d.g.split('').map(Number)); S.obj=parseObjs(d.o);
+  S.ground=d.v>=5?decG(d.g):Uint8Array.from(d.g.split('').map(Number)); S.obj=d.oc?decObjs(d.oc):parseObjs(d.o);
   S.pets=d.pets||[]; S.diff=DIFF[d.diff]?d.diff:'normal'; S.surv=d.surv||{};
   S.xp=d.xp||0; S.lvl=d.lvl||1; S.falcon=d.falcon||0; S.tasks=d.tasks||[];
   S.jeep=d.jeep?Object.assign({vx:0,vy:0},d.jeep):null;
   S.items=(d.items||[]).map(it=>Object.assign({t:0,delay:0},it));
-  S.other=d.mine?{ground:decG(d.mine.g),obj:parseObjs(d.mine.o),items:(d.mine.items||[]).map(it=>Object.assign({t:0,delay:0},it))}:null;
+  S.other=d.mine?{ground:decG(d.mine.g),obj:d.mine.oc?decObjs(d.mine.oc):parseObjs(d.mine.o),items:(d.mine.items||[]).map(it=>Object.assign({t:0,delay:0},it))}:null;
   S.loadLayer=d.mine&&d.layer===1?1:0;
   Object.assign(S.p,d.p); S.inv=d.inv.map(s=>s&&IT[s.id]?s:null); while(S.inv.length<36) S.inv.push(null);
   S.armor=d.armor&&IT[d.armor.id]?d.armor:null; S.sel=d.sel||0; S.st=d.st||{}; S.q=d.q||0; S.notes=d.notes||[0];
@@ -1042,8 +1074,8 @@ function setGround(i,g){ S.ground[i]=g; drawGroundTile(i%MW,(i/MW)|0); }
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.style.opacity=1; clearTimeout(toast.h); toast.h=setTimeout(()=>t.style.opacity=0,2000); }
 let bannerH=null;
 function banner(big,small,ms=3000){ const b=$('banner'); b.innerHTML=''; b.append(big); if(small){ const s=document.createElement('small'); s.textContent=small; b.append(s);} b.style.opacity=1; clearTimeout(bannerH); bannerH=setTimeout(()=>b.style.opacity=0,ms); }
-function ftext(x,y,t,col='#fff'){ texts.push({x,y,t,col,life:1.2}); }
-function burst(x,y,col,n=8,sp=120,size=3){ if(LOWQ) n=Math.ceil(n/2); for(let i=0;i<n;i++){ const a=Math.random()*6.28, s=rand(.3,1)*sp; parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:rand(.3,.7),max:.7,col,size:rand(size*.6,size*1.3)}); } }
+function ftext(x,y,t,col='#fff'){ if(texts.length>40) texts.shift(); texts.push({x,y,t,col,life:1.2}); }
+function burst(x,y,col,n=8,sp=120,size=3){ if(LOWQ) n=Math.ceil(n/2); if(parts.length>350) return; for(let i=0;i<n;i++){ const a=Math.random()*6.28, s=rand(.3,1)*sp; parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:rand(.3,.7),max:.7,col,size:rand(size*.6,size*1.3)}); } }
 const isNight=()=>S&&(S.time%CYCLE)>=DAY;
 const dayNum=()=>floor(S.time/CYCLE)+1;
 function blocked(tx,ty,who){
@@ -1082,7 +1114,11 @@ function gain(id,n,x,y){ if(!n) return; inc('got_'+id,n); addItem(id,n); ftext(x
 function countItem(id){ let c=0; for(const s of S.inv) if(s&&s.id===id) c+=s.n; return c; }
 function removeItem(id,n){ for(let i=35;i>=0&&n>0;i--){ const s=S.inv[i]; if(s&&s.id===id){ const m=Math.min(n,s.n); s.n-=m; n-=m; if(s.n<=0) S.inv[i]=null; } } hotDirty=true; }
 function consumeSel(){ const s=S.inv[S.sel]; if(!s) return; s.n--; if(s.n<=0) S.inv[S.sel]=null; hotDirty=true; }
-function dropItem(id,n,x,y,bag){ S.items.push({x:x+rand(-12,12),y:y+rand(-12,12),id,n,bag,t:Math.random()*6,delay:bag?0:.6}); }
+function dropItem(id,n,x,y,bag){
+  // the same item dropped close by joins the existing pile instead of adding another one
+  if(!bag) for(const it of S.items) if(!it.bag&&it.id===id&&it.n+n<=99&&Math.abs(it.x-x)<28&&Math.abs(it.y-y)<28){ it.n+=n; it.t=Math.min(it.t,6); return; }
+  S.items.push({x:x+rand(-12,12),y:y+rand(-12,12),id,n,bag,t:Math.random()*6,delay:bag?0:.6});
+}
 const cur=()=>S.inv[S.sel];
 /* ---------- tool durability ---------- */
 function maxDur(id){
@@ -1232,7 +1268,7 @@ function hitMob(m,dmg,kx=0,ky=0){
 }
 function killMob(m){
   m.dead=true; const M=MOB[m.type];
-  if(M.hostile) inc('kills'); inc('kill_'+m.type); gainXP((XP_KILL[m.type]||0)*(m.boss?3:1),m.x,m.y);
+  if(M.hostile) inc('kills'); inc('kill_'+m.type); if(m.ev&&S.ev) S.ev.kills++; gainXP((XP_KILL[m.type]||0)*(m.boss?3:1),m.x,m.y);
   burst(m.x,m.y,M.zombie?'#3f6b2a':'#7a2a2a',14,170,4); snd(M.zombie?90:140,.25,'sawtooth',.05,-50);
   const drops=[];
   if(M.bossName){ banner('🏆 هزمت '+M.bossName+'!','غنائم كبيرة بانتظارك',4000); snd(523,.3,'triangle',.06); setTimeout(()=>snd(784,.4,'triangle',.06),200); }
@@ -1271,7 +1307,7 @@ function dismantle(i,broken){
   const o=S.obj[i]; if(!o||!OBJ[o.t].max) return false;
   if(o.t==='radio'&&S.ev){ toast('ما تقدر تفك المحطة وهي ترسل!'); return false; }
   spillChest(o,(i%MW+.5)*TILE,(floor(i/MW)+.5)*TILE);
-  S.obj[i]=null; addItem(o.t,1); if(S.bed===i) S.bed=-1; flowT=0; regionT=0;
+  S.obj[i]=null; addItem(o.t,1); if(S.bed===i) S.bed=-1; flowT=0; regionT=0; structDirty=true;
   const X=(i%MW+.5)*TILE, Y=(floor(i/MW)+.5)*TILE;
   ftext(X,Y-20,'+1 '+IT[o.t].ic,'#f2e4b0'); burst(X,Y,'#a8743f',10,120,3); snd(260,.08,'triangle',.04,-100);
   return true;
@@ -1450,7 +1486,7 @@ function place(T,o,it){
   if(ob.ps||ob.zs) for(const m of mobs){ const r=MOB[m.type].r; if(Math.abs(m.x-cx)<TILE/2+r&&Math.abs(m.y-cy)<TILE/2+r) return; }
   if(S.layer&&(D.place==='bed'||D.place==='radio')){ toast('هذا يتحط فوق على السطح، مو في المنجم'); return; }
   if(D.place==='radio'&&S.obj.some(q=>q&&q.t==='radio')){ toast('عندك محطة راديو وحدة تكفي'); return; }
-  S.obj[T.i]={t:D.place,hp:ob.max}; if(D.place==='chest') S.obj[T.i].items=new Array(27).fill(null); regionT=0;
+  S.obj[T.i]={t:D.place,hp:ob.max}; if(D.place==='chest') S.obj[T.i].items=new Array(27).fill(null); regionT=0; structDirty=true;
   consumeSel(); inc('placed_'+D.place); if(/_wall$/.test(D.place)) inc('walls');
   if(D.place==='bed'){ S.bed=T.i; toast('🛏️ هذا السرير صار نقطة رجوعك'); }
   burst(cx,cy,'#d9b27a',8,90,3); snd(260,.07,'square',.04,80); flowT=0;
@@ -1498,7 +1534,7 @@ function openCrate(i){
 function radioInteract(){
   if(S.ev){ toast('النداء مُرسل… اصمد!'); return; }
   if(st('rescued')){ showDialog([{t:'📡 محطة الراديو',x:'«هنا المنطقة الآمنة. نحن نسمعك دائماً. الله يحفظك.»'}]); return; }
-  showDialog([{t:'📡 إرسال النداء',x:'إذا أرسلت النداء، صوت الجهاز بيجذب كل الزومبي والذئاب في المنطقة.\n\nلازم تصمد 3 دقائق حتى تصل المروحية، ولازم تحمي نفسك.\n\nجاهز؟'}],null,{yes:'أرسل النداء 📡',no:'ليس الآن',onYes:startEvent});
+  showDialog([{t:'📡 إرسال النداء',x:'«هنا المنطقة الآمنة… وصلتنا إشارتك! المروحية تحتاج أرض فاضية تهبط فيها.»\n\nبيتعلّم لك مكان الهبوط على الخريطة 🚁. روح له، والمصابون بيجونك على دفعات (5 في كل موجة).\n\nاقتل 50 مصاب وتهبط المروحية عليك.\n\nجاهز؟'}],null,{yes:'أرسل النداء 📡',no:'ليس الآن',onYes:startEvent});
 }
 
 /* =========================================================
@@ -1542,7 +1578,10 @@ function startNight(){
   snd(110,1.2,'sawtooth',.05,-40); setTimeout(()=>snd(82,1.4,'sawtooth',.05,-30),500);
 }
 function dawn(){
-  if(!S.ev){ for(const m of mobs) if((MOB[m.type].zombie&&!m.cave)||m.night){ m.leaving=true; m.leaveT=0; } spawnQ=[]; }
+  // sunrise: the infected can't stand sunlight and collapse; night wolves go back to the forest
+  for(const m of mobs){ if(m.ev||m.cave||m.dead) continue;
+    if(MOB[m.type].zombie) m.sunDie=rand(1.2,2.4); else if(m.night){ m.leaving=true; m.leaveT=0; } }
+  if(!S.ev) spawnQ=[];
   inc('nights'); S.nightType='normal';
   S.dropAt=(dayNum()>=2&&Math.random()<.45)?rand(25,DAY-50):0;
   if(sleeping){ sleeping=false; inc('slept'); toast('☀️ صباح الخير! نمت الليل كله'); }
@@ -1557,28 +1596,51 @@ function dawn(){
   for(const o of S.obj) if(o&&o.t==='bush') o.b=1;
   fixConnectivity();
   }
-  banner('☀️ اليوم '+dayNum(),'الحمد لله، نجوت! المصابون هربوا من ضوء الشمس',3200);
+  banner('☀️ اليوم '+dayNum(),'الحمد لله، نجوت! المصابون ما تحمّلوا ضوء الشمس',3200);
   snd(523,.2,'triangle',.05); setTimeout(()=>snd(659,.2,'triangle',.05),180); setTimeout(()=>snd(784,.35,'triangle',.05),360);
   flowT=0; save(true);
 }
+/* ---------- final mission: go to the landing zone, survive waves of 5, kill 50 ---------- */
+const EV_NEED=50, EV_WAVE=5;
+function findLandingZone(){
+  // an open patch (5x5 with nothing on it) 12-26 tiles away, away from your lanterns
+  for(let k=0;k<400;k++){
+    const a=rand(0,6.28), d=rand(12,26), x=floor(S.p.x/TILE+Math.cos(a)*d), y=floor(S.p.y/TILE+Math.sin(a)*d);
+    if(x<4||y<4||x>MW-5||y>MH-5) continue; let ok=true;
+    for(let dy=-2;dy<=2&&ok;dy++)for(let dx=-2;dx<=2;dx++){ const i=idx(x+dx,y+dy); if(S.obj[i]||S.ground[i]===2){ ok=false; break; } }
+    if(ok&&lamps.every(L=>Math.hypot(L.x-(x+.5)*TILE,L.y-(y+.5)*TILE)>LAMP_R+120)) return {x:(x+.5)*TILE,y:(y+.5)*TILE};
+  }
+  return {x:S.p.x,y:S.p.y};
+}
 function startEvent(){
   save(true);
-  S.ev={t:180,spawn:2,total:180}; inc('radio_on');
-  banner('📡 النداء أُرسل!','اصمد 3 دقائق حتى تصل المروحية',4000);
+  const z=findLandingZone();
+  S.ev={phase:'goto',zx:z.x,zy:z.y,kills:0,wave:0,waveT:0}; inc('radio_on');
+  banner('📡 النداء أُرسل!','روح لمنطقة الهبوط 🚁 — اتبع السهم الأصفر',4000);
   for(let k=0;k<3;k++) setTimeout(()=>snd(880,.25,'sine',.05,-200),k*350);
 }
+function spawnNear(type,cx,cy,minR,maxR){
+  for(let k=0;k<40;k++){ const a=rand(0,6.28), d=rand(minR,maxR)*TILE, tx=floor((cx+Math.cos(a)*d)/TILE), ty=floor((cy+Math.sin(a)*d)/TILE);
+    if(!inMap(tx,ty)||blocked(tx,ty,'z')||S.obj[idx(tx,ty)]) continue;
+    mobs.push(makeMob(type,(tx+.5)*TILE,(ty+.5)*TILE,{ev:1,aggro:99})); return true; }
+  return false;
+}
 function updateEvent(dt){
-  const ev=S.ev; ev.t-=dt; ev.spawn-=dt;
-  const prog=1-ev.t/ev.total;
-  if(ev.spawn<=0&&ev.t>8){
-    ev.spawn=rand(2,3)*(1-prog*.45);
-    const n=randi(2,3+floor(prog*3));
-    for(let k=0;k<n;k++){ const r=Math.random(); spawnHostile(r<.12+prog*.15?'brute':r<.45?'runner':'walker'); }
-    if(Math.random()<.3+prog*.3) spawnHostile('wolfpack');
+  const ev=S.ev, p=S.p, dz=Math.hypot(p.x-ev.zx,p.y-ev.zy);
+  if(ev.phase==='goto'){ if(dz<TILE*3){ ev.phase='fight'; ev.waveT=1.5; banner('🚁 وصلت منطقة الهبوط!','اقتل '+EV_NEED+' مصاب… بيجونك على موجات',3500); snd(300,.6,'sawtooth',.05,-80); } return; }
+  if(ev.phase!=='fight') return;
+  const alive=mobs.filter(m=>m.ev&&!m.dead&&!m.leaving).length;
+  ev.waveT-=dt;
+  // next wave once the last one is (almost) cleared, or after 25s — and only while you're at the zone
+  if(dz<TILE*9&&ev.kills+alive<EV_NEED&&(alive<=1||ev.waveT<=-25)&&ev.waveT<=0){
+    ev.wave++; ev.waveT=2.5;
+    const n=Math.min(EV_WAVE,EV_NEED-ev.kills-alive), late=ev.kills/EV_NEED;
+    for(let k=0;k<n;k++){ const r=Math.random(); spawnNear(r<.08+late*.15?'brute':r<.35+late*.2?'runner':'walker',ev.zx,ev.zy,9,13); }
+    banner('🧟 الموجة '+ev.wave,'قتلت '+ev.kills+' من '+EV_NEED,1800); snd(110,.8,'sawtooth',.05,-40);
   }
-  if(ev.t<=0){
-    S.ev=null; for(const m of mobs) if(MOB[m.type].hostile){ m.leaving=true; m.leaveT=0; }
-    S.heli={t:0,x:S.p.x,y:S.p.y}; banner('🚁 المروحية وصلت!','',3000);
+  if(ev.kills>=EV_NEED){
+    ev.phase='heli'; for(const m of mobs) if(m.ev){ m.leaving=true; m.leaveT=0; }
+    S.heli={t:0,x:ev.zx,y:ev.zy}; banner('🚁 المروحية تهبط!','الحمد لله… صمدت',3500); S.ev=null;
   }
 }
 function finishRescue(){
@@ -1663,6 +1725,7 @@ function update(dt){
   for(const t of texts){ t.y-=28*dt; t.life-=dt; } texts=texts.filter(t=>t.life>0);
   // ground items
   for(let k=S.items.length-1;k>=0;k--){ const it=S.items[k]; it.t+=dt; it.delay=Math.max(0,(it.delay||0)-dt);
+    if(!it.bag&&it.t>600){ S.items.splice(k,1); continue; } // forgotten drops vanish after 10 minutes (your death bag never does)
     const d=Math.hypot(it.x-p.x,it.y-p.y);
     if(it.delay<=0&&d<70&&d>4){ it.x+=(p.x-it.x)/d*200*dt; it.y+=(p.y-it.y)/d*200*dt; }
     if(it.delay<=0&&d<20){
@@ -1673,7 +1736,9 @@ function update(dt){
   shake=Math.max(0,shake-dt*30);
   questT-=dt; if(questT<=0){ questT=.5; checkQuest(); }
   goalT-=dt; if(goalT<=0){ goalT=1; updateGoal(); }
-  regionT-=dt; if(regionT<=0){ regionT=.6; computeRooms(); checkRegion(); refreshLamps(); }
+  regionT-=dt; if(regionT<=0){ regionT=.6; checkRegion();
+    if(structDirty){ structDirty=false; computeRooms(); refreshLamps(); } // only when something was built or removed
+    if(playerRoom&&!st('roofed')){ inc('roofed'); banner('🏠 بيتك صار له سقف!','داخل البيت: الجوع أبطأ، والصحة ترجع أسرع',4500); } }
   sideT-=dt; if(sideT<=0){ sideT=2; checkSide(); checkTasks(); }
   updateWeather(dt); updateFishing(dt); updateBirds(dt); updateFalcon(dt);
   if(S.dropAt&&!S.layer&&!isNight()&&(S.time%CYCLE)>=S.dropAt){ S.dropAt=0; launchAirdrop(); }
@@ -1882,6 +1947,10 @@ function nextStep(m,F,C){
 function updateMob(m,dt){
   const M=MOB[m.type], p=S.p, R=M.r*(m.boss?1.4:1)*(m.baby>0?.6:1);
   if(p.ride===m){ m.x=p.x; m.y=p.y; m.ang=p.ang; m.step+=dt*((keys.w||keys.a||keys.s||keys.d||keys.arrowup||keys.arrowdown||keys.arrowleft||keys.arrowright||joy)?9:0); return; }
+  if(m.sunDie>0){ // fading away in the morning sun
+    m.sunDie-=dt; m.alpha=clamp(m.sunDie/1.2,0,1); m.flash=0;
+    if(Math.random()<.6) parts.push({x:m.x+rand(-10,10),y:m.y+rand(-8,8),vx:rand(-15,15),vy:rand(-70,-30),life:.6,max:.6,col:Math.random()<.5?'#d8d0c0':'#9a9488',size:rand(2,4)});
+    if(m.sunDie<=0){ m.dead=true; inc('sun_kills'); } return; }
   if(m.tame) tameTick(m,dt);
   if(m.ramCd>0) m.ramCd-=dt;
   if(M.bossName&&!m.leaving) bossTick(m,dt,Math.hypot(p.x-m.x,p.y-m.y));
@@ -1914,7 +1983,7 @@ function updateMob(m,dt){
     if(m.wa!=null){ tx=m.x+Math.cos(m.wa)*50; ty=m.y+Math.sin(m.wa)*50; spd*=.35; }
   }
   // lantern light keeps the infected and wolves away (bosses ignore it)
-  if(M.hostile&&!M.bossName&&!m.leaving&&lamps.length){ let nl=null, nd=1e9;
+  if(M.hostile&&!M.bossName&&!m.leaving&&!m.ev&&lamps.length){ let nl=null, nd=1e9;
     for(const L of lamps){ const d=Math.hypot(m.x-L.x,m.y-L.y); if(d<nd){ nd=d; nl=L; } }
     if(nd<LAMP_R){ tx=m.x+(m.x-nl.x); ty=m.y+(m.y-nl.y); spd*=.8; }
     else if(tx!=null&&Math.hypot(tx-nl.x,ty-nl.y)<LAMP_R+10){ tx=null; ty=null; } }
@@ -2009,13 +2078,14 @@ const GOALS=[
   ()=>null,
   ()=>!st('radio_on')?['radio','📡 محطة الراديو']:null,
 ];
-let goal=null, goalT=0, regionT=0;
+let goal=null, goalT=0, regionT=0, structDirty=true;
 function homePos(){
   if(S.bed>=0&&S.obj[S.bed]&&S.obj[S.bed].t==='bed') return {x:(S.bed%MW+.5)*TILE,y:(floor(S.bed/MW)+.5)*TILE};
   const w=S.obj.findIndex(o=>o&&o.t==='workbench'); return w>=0?{x:(w%MW+.5)*TILE,y:(floor(w/MW)+.5)*TILE}:null;
 }
 function updateGoal(){
   goal=null;
+  if(S.ev&&!S.layer){ const ev=S.ev; if(ev.phase==='goto'||Math.hypot(S.p.x-ev.zx,S.p.y-ev.zy)>TILE*9){ goal={x:ev.zx,y:ev.zy,lbl:'🚁 منطقة الهبوط'}; } return; }
   if(S.layer){ let b=-1, bd=1e9; S.obj.forEach((o,i)=>{ if(o&&o.t==='ladder'){ const d=Math.hypot((i%MW+.5)*TILE-S.p.x,(floor(i/MW)+.5)*TILE-S.p.y); if(d<bd){ bd=d; b=i; } } });
     if(b>=0&&bd>TILE*6) goal={x:(b%MW+.5)*TILE,y:(floor(b/MW)+.5)*TILE,lbl:'🪜 السلّم للطلوع'}; return; }
   const c=S.time%CYCLE;
@@ -2071,6 +2141,10 @@ function render(){
   ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle='#1d2b18'; ctx.fillRect(0,0,cv.width,cv.height);
   const k=DPR*Z; ctx.setTransform(k,0,0,k,Math.round((-camX+sx)*k),Math.round((-camY+sy)*k));
   drawGround(vw,vh);
+  if(S.ev&&!S.layer){ const ev=S.ev, pu=.55+Math.sin(tnow*4)*.25; // landing pad
+    ctx.fillStyle=`rgba(240,195,90,${.12+pu*.1})`; ctx.beginPath(); ctx.arc(ev.zx,ev.zy,TILE*2.4,0,7); ctx.fill();
+    ctx.strokeStyle=`rgba(255,216,106,${pu})`; ctx.lineWidth=5; ctx.beginPath(); ctx.arc(ev.zx,ev.zy,TILE*2.1,0,7); ctx.stroke();
+    ctx.font='bold 64px "Segoe UI",Tahoma,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillStyle=`rgba(255,216,106,${pu})`; ctx.fillText('H',ev.zx,ev.zy+2); }
   if(!S.layer){ const se=season(); if(se.snow){ ctx.fillStyle='rgba(240,245,255,.34)'; ctx.fillRect(camX,camY,vw,vh); } else if(se.pump){ ctx.fillStyle='rgba(200,120,40,.10)'; ctx.fillRect(camX,camY,vw,vh); } }
   const x0=Math.max(0,floor(camX/TILE)-1), x1=Math.min(MW-1,floor((camX+vw)/TILE)+1), y0=Math.max(0,floor(camY/TILE)-1), y1=Math.min(MH-1,floor((camY+vh)/TILE)+2);
   ctx.fillStyle='rgba(200,230,255,.18)';
@@ -2552,8 +2626,12 @@ function drawHeli(t){
    ========================================================= */
 const MCOL={airdrop:'#40d0ff',jeep_wreck:'#8a9a5a',nest:'#d09050',palm:'#3f8a3a',arrow_tower:'#a8743f',cave_rock:'#2a2622',shroom:'#60e0a0',mine:'#000000',ladder:'#ffd86a',well:'#6aa0e0',tree:'#24501f',bush:'#3f8a3a',rock:'#7d7d7d',coal_ore:'#333',iron_ore:'#c07a40',gold_ore:'#f0c040',diamond_ore:'#60f0f0',ruin:'#a09a92',car:'#9a4a30',scrap_pile:'#8a7a6a',crate:'#e0b060',crop:'#a0d060'};
 function drawMini(){
-  const img=msctx.createImageData(MW,MH), d=img.data;
-  for(let i=0;i<NN;i++){ const o=S.obj[i]; let c=o?(MCOL[o.t]||'#d9a860'):GCOL[S.ground[i]]; const n=parseInt(c.slice(1),16); d[i*4]=n>>16; d[i*4+1]=(n>>8)&255; d[i*4+2]=n&255; d[i*4+3]=255; }
+  // colours are converted to numbers once and the pixel buffer is reused (this runs every second)
+  if(!drawMini.img){ drawMini.img=msctx.createImageData(MW,MH); drawMini.g=GCOL.map(h=>parseInt(h.slice(1),16)); drawMini.o={}; }
+  const img=drawMini.img, d=img.data, GC=drawMini.g, OC=drawMini.o;
+  for(let i=0;i<NN;i++){ const o=S.obj[i];
+    const n=o?(OC[o.t]??(OC[o.t]=parseInt((MCOL[o.t]||'#d9a860').slice(1),16))):GC[S.ground[i]];
+    const j=i*4; d[j]=n>>16; d[j+1]=(n>>8)&255; d[j+2]=n&255; d[j+3]=255; }
   msctx.putImageData(img,0,0);
   mctx.imageSmoothingEnabled=false; mctx.drawImage(miniSrc,0,0,192,144);
   const sc=2;
@@ -2605,7 +2683,10 @@ function updateHUD(){
   const key=clock+Math.ceil(p.hp)+'|'+Math.ceil(p.food)+'|'+Math.ceil(p.water)+'|'+S.xp+'|'+S.lvl+(S.armor?S.armor.id:'');
   if(key!==hudKey){ hudKey=key; $('lvlTxt').textContent='⭐'+(S.lvl||1); $('xpBar').style.width=Math.min(100,(S.xp||0)/xpNeed(S.lvl||1)*100)+'%'; $('clock').textContent=clock; $('hpBar').style.width=(p.hp/p.max*100)+'%'; $('foodBar').style.width=p.food+'%'; $('waterBar').style.width=p.water+'%'; $('armorIc').textContent=S.armor?IT[S.armor.id].ic:''; }
   const qh=questHTML(); if(qh!==questKey){ questKey=qh; $('quest').innerHTML=qh; }
-  if(S.ev){ $('evt').hidden=false; $('evt').textContent='📡 المروحية بعد: '+Math.ceil(S.ev.t)+' ث'; } else $('evt').hidden=true;
+  if(S.ev){ $('evt').hidden=false; const ev=S.ev;
+    $('evt').textContent=ev.phase==='goto'?'🚁 روح لمنطقة الهبوط: '+Math.round(Math.hypot(p.x-ev.zx,p.y-ev.zy)/TILE)+' م'
+      :'🧟 قتلت '+ev.kills+'/'+EV_NEED+' · الموجة '+ev.wave+(Math.hypot(p.x-ev.zx,p.y-ev.zy)>TILE*9?' · ارجع للمنطقة!':''); }
+  else $('evt').hidden=true;
   if(hotDirty) buildHotbar();
 }
 
@@ -2897,7 +2978,7 @@ function genMine(){
 }
 function swapLayers(){
   const o=S.other; [S.ground,o.ground]=[o.ground,S.ground]; [S.obj,o.obj]=[o.obj,S.obj]; [S.items,o.items]=[o.items,S.items];
-  S.layer=1-S.layer; redrawGround(); flowT=0; regionT=0; bullets=[]; fishing=null; birds=[]; drawMini();
+  S.layer=1-S.layer; redrawGround(); flowT=0; regionT=0; structDirty=true; bullets=[]; fishing=null; birds=[]; drawMini();
 }
 function spawnCaveMobs(){
   const n=6+Math.min(10,dayNum());
@@ -3073,7 +3154,7 @@ function startGame(loaded){
   S.pets=null; S.p.ride=null; S.p.drive=false; plane=null; sand=0; sleeping=false; fishing=null; rain=0; birds=[]; surfMobs=[];
   if(S.layer){ surfMobs=mobs; mobs=[]; spawnCaveMobs(); }
   falcon=null; if(!S.tasks||!S.tasks.length) makeTasks();
-  computeRooms(); npc=placeNpc(); placeSurvivors(); $('touchBtns').hidden=!((isTouch||MOBILE)&&SET.touch);
+  computeRooms(); refreshLamps(); structDirty=false; npc=placeNpc(); placeSurvivors(); $('touchBtns').hidden=!((isTouch||MOBILE)&&SET.touch);
   if(MOBILE&&VH>VW&&!startGame.tip){ startGame.tip=1; setTimeout(()=>toast('📱 نصيحة: اقلب الجوال بالعرض عشان تشوف أكثر من العالم'),5000); }
   redrawGround(); lastNight=isNight(); running=true; hotDirty=true; hudKey=''; questKey='';
   $('menu').hidden=true; $('hud').hidden=false;
@@ -3163,7 +3244,7 @@ function frame(now){
     if(running&&!anyPanel()) update(dt);
     else if(running&&curFurn&&!$('furnP').hidden){ tickFurnace(curFurn,dt); furnBars(); } // the open furnace keeps cooking
     render();
-    if(running){ updateHUD(); miniT-=dt; if(miniT<=0){ miniT=.5; drawMini(); } }
+    if(running){ updateHUD(); miniT-=dt; if(miniT<=0){ miniT=SET.mini?1:3; drawMini(); } }
   }
   requestAnimationFrame(frame);
 }
