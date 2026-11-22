@@ -761,12 +761,34 @@ let AC=null, muted=false;
 const SET={vol:80,mute:false,bright:100,ui:1,shake:true,mini:true,arrow:true,touch:true,quality:'auto',fps:false,layout:'auto'};
 try{ Object.assign(SET,JSON.parse(localStorage.getItem('nightFarm_settings')||'{}')); }catch(e){}
 function ac(){ if(!AC){ try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){} } if(AC&&AC.state==='suspended') AC.resume(); return AC; }
+/* softer sound: every tone goes through a low-pass filter (no harsh buzz), starts with a tiny fade-in
+   (no clicks), and at most ~6 sounds start per 0.1s so big fights don't turn into noise */
+let sndWin=0, sndCount=0;
 function snd(f,d=.08,type='square',v=.04,slide=0){
-  if(muted||SET.vol<=0) return; const a=ac(); if(!a) return; v*=SET.vol/100;
-  try{ const o=a.createOscillator(), g=a.createGain(); o.type=type; o.frequency.setValueAtTime(f,a.currentTime);
-    if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(30,f+slide),a.currentTime+d);
-    g.gain.setValueAtTime(v,a.currentTime); g.gain.exponentialRampToValueAtTime(.0001,a.currentTime+d);
-    o.connect(g); g.connect(a.destination); o.start(); o.stop(a.currentTime+d+.02);}catch(e){}
+  if(muted||SET.vol<=0) return; const a=ac(); if(!a) return;
+  const now=performance.now(); if(now-sndWin>100){ sndWin=now; sndCount=0; } if(++sndCount>6) return;
+  v*=SET.vol/100*.85;
+  try{ const o=a.createOscillator(), g=a.createGain(), lp=a.createBiquadFilter(), t0=a.currentTime;
+    lp.type='lowpass'; lp.frequency.value=type==='sine'?6000:type==='triangle'?3200:1500; lp.Q.value=.3;
+    o.type=type; o.frequency.setValueAtTime(f,t0);
+    if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(30,f+slide),t0+d);
+    g.gain.setValueAtTime(.0001,t0); g.gain.linearRampToValueAtTime(v,t0+.008); g.gain.exponentialRampToValueAtTime(.0001,t0+d);
+    o.connect(lp); lp.connect(g); g.connect(a.destination); o.start(t0); o.stop(t0+d+.03);}catch(e){}
+}
+/* the jeep's engine: one quiet, continuous low hum that rises with speed (instead of rapid buzzing beeps) */
+let engine=null;
+function engineSet(sp){
+  const a=ac(); if(!a) return; if(muted||SET.vol<=0){ engineStop(); return; }
+  if(!engine){ try{ const o=a.createOscillator(), o2=a.createOscillator(), lp=a.createBiquadFilter(), g=a.createGain();
+      o.type='triangle'; o2.type='sine'; lp.type='lowpass'; lp.frequency.value=360; g.gain.value=0;
+      o.connect(lp); o2.connect(lp); lp.connect(g); g.connect(a.destination); o.start(); o2.start(); engine={o,o2,g}; }catch(e){ return; } }
+  const t=a.currentTime, f=40+sp*.08;
+  engine.o.frequency.setTargetAtTime(f,t,.15); engine.o2.frequency.setTargetAtTime(f*2.01,t,.15);
+  engine.g.gain.setTargetAtTime((.008+Math.min(1,sp/400)*.014)*SET.vol/100,t,.2);
+}
+function engineStop(){
+  if(!engine) return; const e=engine; engine=null;
+  try{ e.g.gain.setTargetAtTime(0,ac().currentTime,.08); setTimeout(()=>{ try{ e.o.stop(); e.o2.stop(); }catch(_){} },450); }catch(_){}
 }
 let noiseBuf=null;
 function noise(d=.15,v=.08,hp=800){
@@ -1325,7 +1347,8 @@ function useAction(){
   if(S.jeep&&!S.layer){ const a=aimWorld(), J=S.jeep;
     if(Math.hypot(a.x-J.x,a.y-J.y)<32&&Math.hypot(J.x-p.x,J.y-p.y)<REACH+30){ p.cd=.4; mouse.down=false;
       if(it&&it.id==='fuel_can'){ if(J.fuel>=99) toast('الخزان مليان'); else { J.fuel=Math.min(100,J.fuel+40); J.warned=0; consumeSel(); toast('⛽ عبّيت وقود: '+Math.round(J.fuel)+'%'); snd(300,.3,'sine',.04,-100); } return; }
-      if(p.ride) dismount(); p.drive=true; fishing=null; J.vx=J.vy=0; inc('drove'); toast('🚙 ركبت الجيب! تحرّك بالأسهم أو العصا — F للنزول'); snd(80,.5,'sawtooth',.05,40); return; } }
+      if(p.ride) dismount(); p.drive=true; fishing=null; J.vx=J.vy=0; inc('drove'); hotDirty=true; tbtn=null;
+      toast(MOBILE?'🚙 ركبت الجيب! تحرّك بالعصا — للنزول اضغط 🚪':'🚙 ركبت الجيب! تحرّك بالأسهم — للنزول F أو اضغط على الجيب'); snd(80,.5,'triangle',.05,40); return; } }
   if(!S.layer){ const a=aimWorld();
     if(npc&&Math.hypot(a.x-npc.x,a.y-npc.y)<24&&Math.hypot(npc.x-p.x,npc.y-p.y)<REACH+30){ p.cd=.4; talkNpc(); return; }
     for(const s of survs) if(Math.hypot(a.x-s.x,a.y-s.y)<24&&Math.hypot(s.x-p.x,s.y-p.y)<REACH+30){ p.cd=.4; talkSurv(s); return; } }
@@ -1678,6 +1701,8 @@ function update(dt){
   if(MOBILE&&ml>0&&!aimTouch&&!tbtn) p.ang=Math.atan2(my,mx); // on phones you face where you walk
   else if(mouse.has&&(!(touchMode||MOBILE)||aimTouch||tbtn)){ const a=aimWorld(); p.ang=Math.atan2(a.y-p.y,a.x-p.x); } else if(ml>0) p.ang=Math.atan2(my,mx);
   p.cd-=dt; p.swing=Math.max(0,p.swing-dt); p.hurt=Math.max(0,p.hurt-dt); p.recoil=Math.max(0,p.recoil-dt); p.safe=Math.max(0,(p.safe||0)-dt);
+  if(mouse.down&&p.drive&&S.jeep){ // driving: ✋ / 🚪 button, or tapping/clicking the jeep itself, gets you out
+    const a=aimWorld(); if(tbtn==='use'||Math.hypot(a.x-S.jeep.x,a.y-S.jeep.y)<45){ mouse.down=false; tbtn=null; exitJeep(); } }
   if(mouse.down&&!p.drive) useAction();
   // hunger & regen
   playerRoom=room[idx(clamp(floor(p.x/TILE),0,MW-1),clamp(floor(p.y/TILE),0,MH-1))];
@@ -1818,7 +1843,7 @@ let plane=null;
 const AIRDROP_LOOT=[['medkit',1],['bullets',20],['iron',4],['gold',2],['fuel_can',2],['bread',4],['arrows',25],['circuit',1],['water',3],['fertilizer',4],['diamond',1],['repair_kit',1]];
 function launchAirdrop(){ const s=spawnSpot(12,26); if(!s) return; plane={x:s.x-1000,y:s.y,tx:s.x,ty:s.y,dropped:false}; banner('✈️ طائرة في السماء!','راقب… يمكن ترمي شيء',3000); }
 function updatePlane(dt){
-  if(!plane) return; plane.x+=330*dt; if(Math.random()<dt*4) snd(70,.3,'sawtooth',.015);
+  if(!plane) return; plane.x+=330*dt; if(Math.random()<dt*1.5) snd(90,.4,'triangle',.012,-10);
   if(!plane.dropped&&plane.x>=plane.tx){ plane.dropped=true; const i=idx(floor(plane.tx/TILE),floor(plane.ty/TILE));
     if(!S.layer&&!S.obj[i]&&S.ground[i]!==2){ S.obj[i]={t:'airdrop',hp:1}; flowT=0; banner('📦 الطائرة رمت صندوق إمدادات!','اتبع السهم الأصفر',3500); snd(660,.3,'triangle',.05,-200); } }
   if(plane.x>plane.tx+1100) plane=null;
@@ -1851,7 +1876,7 @@ function driveJeep(dt,mx,my,ml){
   p.x=J.x; p.y=J.y;
   if(sp>130) for(const m of mobs){ if(!MOB[m.type].hostile||m.dead||m.leaving||(m.ramCd||0)>0) continue;
     if(Math.hypot(m.x-J.x,m.y-J.y)<MOB[m.type].r+18){ hitMob(m,sp*.14*dmgMul(),J.vx*.5,J.vy*.5); m.ramCd=.5; J.vx*=.65; J.vy*=.65; shake=6; snd(120,.12,'square',.05,-60); if(m.dead) inc('rammed'); } }
-  J.snd=(J.snd||0)-dt; if(J.snd<=0&&sp>40){ J.snd=.18; snd(55+sp*.12,.2,'sawtooth',.012); }
+  engineSet(sp);
 }
 function exitJeep(){
   const p=S.p, J=S.jeep; if(!p.drive) return; p.drive=false; J.vx=J.vy=0;
@@ -2618,7 +2643,7 @@ function drawHeli(t){
   ctx.fillStyle='#eee'; ctx.fillRect(-4,-4,14,8); ctx.fillStyle='#3a8a3a'; ctx.fillRect(-1,-1,8,2);
   ctx.strokeStyle='rgba(30,30,30,.7)'; ctx.lineWidth=4; const a=t*30; ctx.beginPath(); ctx.moveTo(Math.cos(a)*60,Math.sin(a)*14-18); ctx.lineTo(-Math.cos(a)*60,-Math.sin(a)*14-18); ctx.stroke();
   ctx.restore();
-  if(Math.random()<.3) snd(60,.05,'sawtooth',.02);
+  if((drawHeli.n=(drawHeli.n||0)+1)%10===0) snd(70,.12,'triangle',.03,-15); // soft rotor thump
 }
 
 /* =========================================================
@@ -2661,6 +2686,7 @@ function buildHotbar(){
   for(let i=0;i<9;i++){ const b=document.createElement('button'); b.className='slot'+(i===S.sel?' on':''); b.innerHTML=slotHTML(S.inv[i],i+1);
     b.setAttribute('aria-label',S.inv[i]?IT[S.inv[i].id].n:'خانة فارغة'); onTap(b,()=>{ ac(); S.sel=i; hotDirty=true; }); hb.appendChild(b); }
   const s=cur(); let lbl='يد فارغة';
+  if(S.p.drive){ $('selLbl').textContent=MOBILE?'🚙 تسوق الجيب — اضغط 🚪 للنزول':'🚙 تسوق الجيب — اضغط F أو اضغط على الجيب للنزول'; hotDirty=false; return; }
   if(s){ const D=IT[s.id]; lbl=D.n+(s.n>1?' × '+s.n:'');
     if(D.gun) lbl+=' — '+IT[D.ammo].n+': '+countItem(D.ammo);
     else if(D.food!=null) lbl+=' — اضغط لتاكل (+'+D.food+')';
@@ -2677,7 +2703,8 @@ function updateHUD(){
   const hostile=mobs.filter(m=>MOB[m.type].hostile&&!m.leaving).length;
   const clock=(night?'🌙':c>DAY-24?'🌇':'☀️')+' اليوم '+dayNum()+' · '+String(hh).padStart(2,'0')+':'+String(mm).padStart(2,'0')+(night&&(hostile+spawnQ.length)?' · 🧟 '+(hostile+spawnQ.length):'')+(rain>0&&!S.layer?(season().snow?' · 🌨️':' · 🌧️'):'')+(playerRoom?' · 🏠':'')+' · '+(S.layer?'⛏️ المنجم':season().ic+' '+season().n)
     +(sand>0&&!S.layer?' · 🌪️':'')+(night&&S.nightType==='fog'?' · 🌫️':night&&S.nightType==='moon'?' · 🌕':'')+(p.drive&&S.jeep?' · ⛽ '+Math.round(S.jeep.fuel)+'%':'');
-  $('bRide').hidden=!(S.p.ride||S.p.drive); $('bRide').textContent=S.p.drive?'🚙':'🐪';
+  $('bRide').hidden=!(S.p.ride||S.p.drive); { const ic=S.p.drive?'🚪':'🐪'; if($('bRide').textContent!==ic) $('bRide').textContent=ic; }
+  { const ic=S.p.drive?'🚪':'✋', tu=$('tUse'); if(tu.textContent!==ic) tu.textContent=ic; }
   { const bs=mobs.find(m=>MOB[m.type].bossName&&!m.dead&&!m.leaving); $('bossBar').hidden=!bs;
     if(bs){ $('bossName').textContent='⚠️ '+MOB[bs.type].bossName; $('bossHp').style.width=Math.max(0,bs.hp/bs.max*100)+'%'; } }
   const key=clock+Math.ceil(p.hp)+'|'+Math.ceil(p.food)+'|'+Math.ceil(p.water)+'|'+S.xp+'|'+S.lvl+(S.armor?S.armor.id:'');
@@ -3241,6 +3268,7 @@ function frame(now){
     if(running&&!document.hidden&&SET.quality==='auto'&&!autoLow){ slowT=fpsAvg<38?slowT+raw:0; if(slowT>4){ autoLow=true; applySettings(); toast('⚙️ خففت الرسوم تلقائياً عشان اللعبة تصير أسرع'); } }
     fpsT-=raw; if(fpsT<=0&&SET.fps){ fpsT=.5; $('fps').textContent=Math.round(fpsAvg)+' FPS'+(LOWQ?' · مخففة':''); } }
   if(S){
+    if(engine&&!(running&&!anyPanel()&&S.p.drive)) engineStop();
     if(running&&!anyPanel()) update(dt);
     else if(running&&curFurn&&!$('furnP').hidden){ tickFurnace(curFurn,dt); furnBars(); } // the open furnace keeps cooking
     render();

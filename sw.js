@@ -1,7 +1,7 @@
 // Offline support for «مزرعة الليل».
 // Serves the saved copy right away (works with no internet), and quietly refreshes it
 // from the network in the background so the next launch gets any update.
-const CACHE = 'night-farm-v3';
+const CACHE = 'night-farm-v4';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
